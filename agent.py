@@ -103,13 +103,17 @@ def interpret_intent(user_input: str) -> list[dict]:
         "Each command must be a valid JSON object with 'tool' and 'args'.\n"
         "Available tools and their arguments:\n"
         f"{tool_descriptions}\n\n"
-        "If namespace is not given, but you see it as a parameter in tool description, set it to 'default'.\n"
+        'Never go out of the scope of parameters presented in the tool descriptions. The arguments must match the tool signatures exactly.\n'
+        "If namespace is not given, but you see it as a parameter in tool description, set it to 'default'.(be careful with namespace functions, as the only argument they recieve is namespace itself,one example is given)\n"
         "If namespace is not required, do not include it in args.\n"
         "Examples:\n"
         '{"tool": "list_pods", "args": {"namespace": "default"}}\n'
+        '{"tool": "delete_namespace", "args": {"namespace": "ns_name"}}\n'
         '{"tool": "scale_deployment", "args": {"deployment_name": "nginx", "replicas": 4, "namespace": "default"}}\n'
         '{"tool": "restart_deployment", "args": {"deployment_name": "cicd", "namespace": "default"}}\n'
         '{"tool": "get_nodes", "args": {}}\n'
+
+        'Finally, if one argument in a tool is given multiple values, such as listing pods in multiple namespaces, you should generate separate commands for each value.\n'
     )
 
     full_prompt = f"{system_prompt}\nUser: {user_input}\nCommand:"
@@ -148,10 +152,9 @@ def interpret_intent(user_input: str) -> list[dict]:
 
 
 def tool_requires_namespace(tool_name: str) -> bool:
-    info = TOOLS_INFO.get(tool_name, {})
-    signature = info.get("signature", {})
+    """Check if tool needs a namespace argument."""
+    signature = TOOLS_INFO.get(tool_name, {})
     return isinstance(signature, dict) and "namespace" in signature
-
 
 def call_mcp(command: dict) -> dict:
     """Send parsed JSON command to MCP server and return the result."""
@@ -176,9 +179,9 @@ def run_agent():
 
     TOOLS_INFO = get_tool_definitions()
     if not TOOLS_INFO:
-        print("[Agent] ⚠️ No tools retrieved.")
+        print("[Agent]  No tools retrieved.")
     else:
-        print(f"[Agent] ✅ Loaded {len(TOOLS_INFO)} tools from MCP.\n")
+        print(f"[Agent]  Loaded {len(TOOLS_INFO)} tools from MCP.\n")
 
     print("Agent ready. Type commands ('exit' to quit, 'show tools' to list tools):\n")
 
@@ -190,8 +193,9 @@ def run_agent():
 
         if user_input.lower() in ("show tools", "list tools"):
             for name, info in TOOLS_INFO.items():
-                desc = info.get("doc", "").strip() or info.get("signature", "")
-                print(f"- {name}: {desc}")
+        # info is already the signature dict
+                args_desc = ", ".join(f"{k}: {v}" for k, v in info.items())
+                print(f"- {name}: {args_desc}")
             continue
 
         commands = interpret_intent(user_input)
