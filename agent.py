@@ -130,7 +130,7 @@ def interpret_intent(user_input: str) -> list[dict]:
     )
 
     full_prompt = f"{system_prompt}\n{history_text}User: {user_input}\nCommand:"
-    print(full_prompt)
+    #print(full_prompt)
     llm_output = ask_llm(full_prompt).strip()
 
     extracted = extract_json_objects(llm_output)
