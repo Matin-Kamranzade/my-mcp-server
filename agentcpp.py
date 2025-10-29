@@ -2,6 +2,7 @@ import requests
 import json
 import re
 import time
+from collections import deque  # ✅ for short-term memory
 
 # === CONFIG ===
 MCP_URL = "http://localhost:8000/run"
@@ -11,18 +12,18 @@ LLM_MODEL = "gemma3:4b"
 # === GLOBAL TOOL CACHE ===
 TOOLS_INFO = {}
 
+# === CONVERSATION MEMORY ===
+CONVERSATION_HISTORY = deque(maxlen=10)  # ✅ last 10 turns
+
 
 # === FUNCTIONS ===
 
 def ollama_warmup():
-    """
-    Ensures Ollama is awake before first use.
-    Sometimes Ollama spins down and causes the first request to hang.
-    """
+    """Ensure Ollama is awake before first use."""
     print("[Agent] Warming up Ollama...")
     try:
-        payload = {"model": LLM_MODEL, "prompt": "ping", "stream" : False}
-        requests.post(OLLAMA_URL+"/generate", json=payload, timeout=10)
+        payload = {"model": LLM_MODEL, "prompt": "ping", "stream": False}
+        requests.post(OLLAMA_URL + "/generate", json=payload, timeout=10)
         print("[Agent] Ollama is ready.")
     except Exception:
         print("[Agent] Ollama warm-up failed — will retry on first prompt.")
@@ -31,8 +32,7 @@ def ollama_warmup():
 def ask_llm(prompt: str) -> str:
     """Send prompt to llama.cpp server and return its text output."""
     payload = {"prompt": prompt, "n_predict": 512}
-
-    url = OLLAMA_URL + "/v1/completions"  # llama.cpp API
+    url = OLLAMA_URL + "/v1/completions"
 
     for attempt in range(2):
         try:
@@ -40,14 +40,13 @@ def ask_llm(prompt: str) -> str:
             r.raise_for_status()
             data = r.json()
 
-            # Extract text from different possible llama.cpp formats
             if isinstance(data, dict):
-                if "content" in data:  # native API
+                if "content" in data:
                     return data["content"].strip()
                 elif "choices" in data and data["choices"]:
                     return data["choices"][0].get("text", "").strip()
 
-            return ""  # fallback if nothing usable
+            return ""
         except Exception as e:
             if attempt == 0:
                 print(f"[Agent] LLM not reachable (attempt 1), retrying...")
@@ -55,7 +54,6 @@ def ask_llm(prompt: str) -> str:
                 continue
             print(f"[Agent] Error contacting LLM: {e}")
             return ""
-
 
 def get_tool_definitions() -> dict:
     """Fetch tool definitions from MCP server."""
@@ -69,10 +67,7 @@ def get_tool_definitions() -> dict:
 
 
 def extract_json_objects(text: str) -> list[dict]:
-    """
-    Robustly extract multiple JSON objects from arbitrary text.
-    Uses brace-level tracking (not regex) to handle multiline or nested structures.
-    """
+    """Extract multiple JSON objects safely from LLM output."""
     text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"```", "", text).strip()
 
@@ -87,25 +82,39 @@ def extract_json_objects(text: str) -> list[dict]:
             if brace_level == 0 and start is not None:
                 try:
                     candidate = text[start:i + 1]
-                    data = json.loads(candidate)
-                    objs.append(data)
+                    objs.append(json.loads(candidate))
                 except json.JSONDecodeError:
                     pass
     return objs
 
 
-def interpret_intent(user_input: str) -> list[dict]:
-    """
-    Use the LLM to convert natural language into one or more JSON commands.
-    Handles compound commands like 'scale X and restart Y'.
-    Ensures proper namespace assignment and valid MCP tool names.
-    """
+def update_history(user_input: str, llm_output: str, mcp_output: str):
+    """Store user input, LLM command output, and actual MCP response."""
+    CONVERSATION_HISTORY.append({
+        "user": user_input,
+        "llm": llm_output,
+        "mcp": mcp_output
+    })
 
-    # Describe tools for LLM
+
+
+def interpret_intent(user_input: str) -> list[dict]:
+    """Convert natural language into one or more JSON MCP commands."""
+
     tool_descriptions = "\n".join(
         f"- {name}: {info.get('doc', '').strip() or info.get('signature', '')}"
         for name, info in TOOLS_INFO.items()
     )
+
+    # Include short-term history
+    history_text = ""
+    if CONVERSATION_HISTORY:
+        history_text = "Recent conversation:\n" + "\n".join(
+            f"User: {h.get('user', '')}\n"
+            f"LLM: {h.get('llm', '')}\n"
+            f"Agent: {h.get('mcp', '')}"
+            for h in CONVERSATION_HISTORY
+        ) + "\n\n"
 
     system_prompt = (
         "You are a command translator for a Kubernetes management agent.\n"
@@ -114,47 +123,42 @@ def interpret_intent(user_input: str) -> list[dict]:
         "Each command must be a valid JSON object with 'tool' and 'args'.\n"
         "Available tools and their arguments:\n"
         f"{tool_descriptions}\n\n"
-        'Never go out of the scope of parameters presented in the tool descriptions. The arguments must match the tool signatures exactly.\n'
-        "If namespace is not given, but you see it as a parameter in tool description, set it to 'default'.(be careful with namespace functions, as the only argument they recieve is namespace itself,one example is given)\n"
-        "If namespace is not required, do not include it in args.\n"
+        "Never go beyond the parameters defined in tool descriptions.\n"
+        "If a tool has 'namespace' as a parameter but the user doesn't specify it, set it to 'default'.\n"
+        "If namespace isn't required, omit it.\n"
         "Examples:\n"
         '{"tool": "list_pods", "args": {"namespace": "default"}}\n'
         '{"tool": "delete_namespace", "args": {"namespace": "ns_name"}}\n'
         '{"tool": "scale_deployment", "args": {"deployment_name": "nginx", "replicas": 4, "namespace": "default"}}\n'
         '{"tool": "restart_deployment", "args": {"deployment_name": "cicd", "namespace": "default"}}\n'
         '{"tool": "get_nodes", "args": {}}\n'
-
-        'Finally, if one argument in a tool is given multiple values, such as listing pods in multiple namespaces, you should generate separate commands for each value.\n'
+        "If multiple values are given for one argument, generate one JSON command per value.\n"
     )
 
-    full_prompt = f"{system_prompt}\nUser: {user_input}\nCommand:"
-#    print(full_prompt)
+    full_prompt = f"{system_prompt}\n{history_text}User: {user_input}\nCommand:"
+    print(full_prompt)
     llm_output = ask_llm(full_prompt).strip()
- #   print(llm_output)
-    # Extract JSON objects safely
+
     extracted = extract_json_objects(llm_output)
-  #  print(extracted)
     commands = []
+
     for data in extracted:
         if not isinstance(data, dict) or "tool" not in data:
             continue
 
-        # Ensure args dict exists
         if "args" not in data or not isinstance(data["args"], dict):
             data["args"] = {}
 
-        # Ensure namespace exists
         if tool_requires_namespace(data["tool"]):
-            if "namespace" not in data["args"] or not data["args"]["namespace"]:
-                data["args"]["namespace"] = "default"
+            data["args"].setdefault("namespace", "default")
         else:
             data["args"].pop("namespace", None)
 
-        # Only include known tools
         if data["tool"] in TOOLS_INFO:
             commands.append(data)
         else:
             print(f"[Agent] Ignored unknown tool: {data['tool']}")
+
 
     if not commands:
         print(f"[Agent] Could not find valid JSON in LLM output:\n{llm_output}")
@@ -168,8 +172,9 @@ def tool_requires_namespace(tool_name: str) -> bool:
     signature = TOOLS_INFO.get(tool_name, {})
     return isinstance(signature, dict) and "namespace" in signature
 
+
 def call_mcp(command: dict) -> dict:
-    """Send parsed JSON command to MCP server and return the result."""
+    """Send parsed JSON command to MCP server and return its result."""
     if not command:
         return {"error": "Invalid command."}
 
@@ -183,7 +188,7 @@ def call_mcp(command: dict) -> dict:
 
 
 def run_agent():
-    """Main REPL loop for user interaction."""
+    """Main REPL loop."""
     global TOOLS_INFO
 
     print("Agent initializing...")
@@ -191,9 +196,9 @@ def run_agent():
 
     TOOLS_INFO = get_tool_definitions()
     if not TOOLS_INFO:
-        print("[Agent]  No tools retrieved.")
+        print("[Agent] No tools retrieved.")
     else:
-        print(f"[Agent]  Loaded {len(TOOLS_INFO)} tools from MCP.\n")
+        print(f"[Agent] Loaded {len(TOOLS_INFO)} tools from MCP.\n")
 
     print("Agent ready. Type commands ('exit' to quit, 'show tools' to list tools):\n")
 
@@ -205,7 +210,6 @@ def run_agent():
 
         if user_input.lower() in ("show tools", "list tools"):
             for name, info in TOOLS_INFO.items():
-        # info is already the signature dict
                 args_desc = ", ".join(f"{k}: {v}" for k, v in info.items())
                 print(f"- {name}: {args_desc}")
             continue
@@ -214,11 +218,18 @@ def run_agent():
         if not commands:
             continue
 
+        llm_output_str = json.dumps(commands, indent=2)
+        mcp_output_str = ""
+
         for cmd in commands:
             print(f"[Agent] Executing: {cmd['tool']} {cmd['args']}")
             result = call_mcp(cmd)
-            print(json.dumps(result, indent=2))
+            result_json = json.dumps(result, indent=2)
+            print(result_json)
+            mcp_output_str += f"[Agent] Executing: {cmd['tool']} {cmd['args']}\n{result_json}\n"
 
+        # ✅ Record all layers of this turn
+        update_history(user_input, llm_output_str, mcp_output_str)  
 
 if __name__ == "__main__":
     run_agent()
