@@ -117,12 +117,15 @@ def interpret_intent(user_input: str) -> list[dict]:
         "Never go beyond the parameters defined in tool descriptions.\n"
         "If a tool has 'namespace' as a parameter but the user doesn't specify it, set it to 'default'.\n"
         "If namespace isn't required, omit it.\n"
+        "Convert user input into one or more JSON commands for the MCP server.\n"
+        "Output must be raw JSON only — no markdown, no text, no code fences.\n"
+        "Each command must be a separate JSON object (not inside a list), one after another.\n"
         "Examples:\n"
         '{"tool": "list_pods", "args": {"namespace": "default"}}\n'
         '{"tool": "delete_namespace", "args": {"namespace": "ns_name"}}\n'
         '{"tool": "scale_deployment", "args": {"deployment_name": "nginx", "replicas": 4, "namespace": "default"}}\n'
         '{"tool": "restart_deployment", "args": {"deployment_name": "cicd", "namespace": "default"}}\n'
-        '{"tool": "get_nodes", "args": {}}\n'
+        '{"tool": "list_nodes", "args": {}}\n'
         "If multiple values are given for one argument, generate one JSON command per value.\n"
     )
 
@@ -220,7 +223,7 @@ def run_agent():
             mcp_output_str += f"[Agent] Executing: {cmd['tool']} {cmd['args']}\n{result_json}\n"
 
         # ✅ Record all layers of this turn
-        update_history(user_input, llm_output_str, mcp_output_str)  
+        update_history(user_input, llm_output_str, mcp_output_str)
 
 if __name__ == "__main__":
     run_agent()

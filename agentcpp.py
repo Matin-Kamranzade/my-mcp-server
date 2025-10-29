@@ -229,7 +229,7 @@ def run_agent():
             mcp_output_str += f"[Agent] Executing: {cmd['tool']} {cmd['args']}\n{result_json}\n"
 
         # ✅ Record all layers of this turn
-        update_history(user_input, llm_output_str, mcp_output_str)  
+        #update_history(user_input, llm_output_str, mcp_output_str)  
 
 if __name__ == "__main__":
     run_agent()
