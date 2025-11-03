@@ -6,10 +6,10 @@ from kubernetes import client, config
 
 _CACHE: Dict[str, Tuple[float, Any]] = {}
 _CACHE_TTL = 30.0
-
+kubeconfig_path = r"C:\Users\mkamranzada\.kube\config"
 def load_kube_config():
     try:
-        config.load_kube_config()
+        config.load_kube_config(config_file=kubeconfig_path)
     except Exception:
         try:
             config.load_incluster_config()
