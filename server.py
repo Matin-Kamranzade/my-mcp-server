@@ -96,7 +96,12 @@ class MCPRequestHandler(BaseHTTPRequestHandler):
             self._send_response(200, result)
         except Exception as e:
             import traceback
-            self._send_response(500, {"error": str(e), "trace": traceback.format_exc()[:500]})
+            trace = traceback.format_exc()
+            self._send_response(500, {
+            "error": str(e),
+            "trace": trace
+            })
+
 
 
 

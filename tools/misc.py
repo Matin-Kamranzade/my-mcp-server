@@ -11,12 +11,13 @@ from common import _cache_invalidate, invalid_response
 
 def register_tools(mcp: FastMCP):
     """
-    Register miscellaneous Kubernetes-related tools:
+    Register Kubernetes-related tools with the MCP server:
     - YAML apply
     - Autoscaler creation
     - Node listing
     - Cluster info
-    - Time sync check
+    - Server time check
+    - Warning events retrieval
     """
     tools_dict = {}
 
@@ -96,25 +97,6 @@ def register_tools(mcp: FastMCP):
         except ApiException as e:
             return {"status": "error", "message": str(e)}
 
-    # ---------------- LIST NODES ----------------
-    @register(signature={})
-    def list_nodes() -> Any:
-        """
-        Return all cluster nodes with status, IP, OS, and kernel version.
-        """
-        v1, _, _ = get_clients()
-        nodes = v1.list_node()
-        result = []
-        for node in nodes.items:
-            result.append({
-                "name": node.metadata.name,
-                "status": f"{node.status.conditions[-1].type} - {node.status.conditions[-1].status}",
-                "internal_ip": node.status.addresses[0].address if node.status.addresses else 'N/A',
-                "kernel_version": node.status.node_info.kernel_version,
-                "os_image": node.status.node_info.os_image
-            })
-        return result
-
     # ---------------- CLUSTER INFO ----------------
     @register(signature={})
     def cluster_info() -> Any:
@@ -141,5 +123,37 @@ def register_tools(mcp: FastMCP):
         Useful for debugging clock skew or scheduling issues.
         """
         return {"utc_time": datetime.now(timezone.utc).isoformat()}
+
+    # ---------------- GET WARNING EVENTS ----------------
+    @register(signature={'namespace': 'str'})
+    def get_warning_events(namespace: str):
+        """
+        Lists all warning events in a specified Kubernetes namespace.
+        """
+        load_kube_config()
+        v1, _, _ = get_clients()
+
+        ns_validator = NamespaceValidator(namespace)
+        validation = ns_validator.validate()
+        if validation:
+            return validation
+
+        try:
+            events = v1.list_namespaced_event(namespace)
+            warning_events = [
+                {
+                    "name": e.metadata.name,
+                    "object": getattr(e.involved_object, "name", None),
+                    "reason": e.reason,
+                    "message": e.message,
+                    "last_timestamp": str(e.last_timestamp),
+                }
+                for e in events.items if e.type == "Warning"
+            ]
+            return {"namespace": namespace, "warning_events": warning_events}
+        except ApiException as e:
+            return {"status": "error", "message": f"Kubernetes API error: {e.reason}"}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
 
     return tools_dict

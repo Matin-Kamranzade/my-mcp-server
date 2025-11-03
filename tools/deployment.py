@@ -59,6 +59,62 @@ def register_tools(mcp: FastMCP):
                 return {"status": "exists", "message": f"Deployment '{name}' already exists in '{namespace}'."}
             return {"status": "error", "message": str(e)}
 
+    @register(signature={
+        'namespace': 'str', 'deployment_name': 'str'
+    })
+    def get_deployment_status(namespace: str, deployment_name: str) -> Any:
+        """
+        Retrieve detailed status of a specific Kubernetes deployment,
+        including replica counts, rollout strategy, conditions, and image info.
+        """
+        ns_validator = NamespaceValidator(namespace)
+        validation_error = ns_validator.validate()
+        if validation_error:
+            return validation_error
+
+        dep_validator = DeploymentValidator(namespace, deployment_name)
+        validation_error = dep_validator.validate()
+        if validation_error:
+            return validation_error
+
+        _, apps_v1, _ = get_clients()
+
+        try:
+            dep = apps_v1.read_namespaced_deployment(deployment_name, namespace)
+
+            return {
+                "name": dep.metadata.name,
+                "namespace": namespace,
+                "replicas_desired": dep.spec.replicas,
+                "replicas_ready": dep.status.ready_replicas or 0,
+                "replicas_updated": dep.status.updated_replicas or 0,
+                "replicas_available": dep.status.available_replicas or 0,
+                "replicas_unavailable": dep.status.unavailable_replicas or 0,
+                "strategy": dep.spec.strategy.type if dep.spec.strategy else "Unknown",
+                "conditions": [
+                    {
+                        "type": c.type,
+                        "status": c.status,
+                        "reason": c.reason,
+                        "message": c.message
+                    }
+                    for c in (dep.status.conditions or [])
+                ],
+                "image": (
+                    dep.spec.template.spec.containers[0].image
+                    if dep.spec.template.spec.containers else None
+                ),
+            }
+
+        except ApiException as e:
+            if getattr(e, "status", None) == 404:
+                return invalid_response(
+                    f"Deployment '{deployment_name}' not found in namespace '{namespace}'.",
+                    list_deployments_cached(namespace)
+                )
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
     # ---------------- DELETE DEPLOYMENT ----------------
     @register(signature={
         'name': 'str', 'namespace': 'str'

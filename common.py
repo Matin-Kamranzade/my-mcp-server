@@ -8,12 +8,13 @@ from typing import Any, Dict, List, Tuple
 from kubernetes import client, config, utils
 from kubernetes.client.rest import ApiException
 
+kubeconfig_path = r"C:\Users\mkamranzada\.kube\config"
 
 # === CONFIGURATION ===
 def load_kube_config():
     """Load kube config from local or in-cluster context."""
     try:
-        config.load_kube_config()
+        config.load_kube_config(config_file=kubeconfig_path)
     except Exception:
         try:
             config.load_incluster_config()

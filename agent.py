@@ -34,7 +34,7 @@ def ask_llm(prompt: str) -> str:
 
     for attempt in range(2):
         try:
-            response = requests.post(OLLAMA_URL, json=payload, timeout=60)
+            response = requests.post(OLLAMA_URL, json=payload, timeout=90)
             response.raise_for_status()
             return response.json().get("response", "").strip()
         except Exception as e:

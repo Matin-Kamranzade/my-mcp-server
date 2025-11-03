@@ -126,7 +126,17 @@ def register_tools(mcp: FastMCP):
             services = v1.list_namespaced_service(namespace=namespace)
             result = []
             for svc in services.items:
-                ports = [{"port": p.port, "protocol": p.protocol} for p in (svc.spec.ports or [])]
+                ports = []
+                for p in (svc.spec.ports or []):
+                    port_entry = {
+                        "port": p.port,
+                        "target_port": p.target_port,
+                        "protocol": p.protocol
+                    }
+                    if p.node_port:
+                        port_entry["node_port"] = p.node_port
+                    ports.append(port_entry)
+
                 external_ips = "N/A"
                 if svc.status and getattr(svc.status, "load_balancer", None) and svc.status.load_balancer.ingress:
                     first = svc.status.load_balancer.ingress[0]
